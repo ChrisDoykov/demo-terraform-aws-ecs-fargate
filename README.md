@@ -86,7 +86,7 @@ An example collaborative workflow with an implementation of this project would l
 
 This project is a bit Node-specific because in order to tag the image appropriately and to provide the accurate value for the `image_version` variable, we look for the `version` field inside the `package.json` file. This behaviour is specified in the CI/CD pipeline only so it can easily be changed for use with other frameworks/languages.
 
-# NOTE:
+### NOTE:
 
 Your state key has to be different for each environment, e.g.:
 
@@ -112,6 +112,8 @@ This can be achieved by setting the TF_VAR_environment variable to the correct v
 ## Destroying in production
 
 If you're trying to destroy the production setup and you've set up branch protection on `main`, what you should do is merge `staging` into `main` and set the merge commit message to `Destroy all resources`.
+
+**Important Note:** Because of the fact that some resources need to be shared across environments (like DNS hosted zones, etc.) you need to be mindful that if you destroy one of your environments this will affect your other environment and you'd need to deploy that one again to re-create all the common resources deleted by the destruction of the other environment. This is not a big issue for the most part but it is something you need to be aware of. In general you'll always ideally keep your two main environments running for the duration of the project (or for as long as you need the service to keep running and be available) and either delete all environments together or none at all, it's a rare case that you'd only need to destroy `staging` for example and keep `prod` running and this scenario can be remedied with minmal downtime using the solution mentioned at the start of this note.
 
 ## Caveats and limitations
 
