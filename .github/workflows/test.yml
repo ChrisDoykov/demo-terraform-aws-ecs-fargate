@@ -1,0 +1,29 @@
+name: Test the source code
+
+on:
+  push:
+    branches-ignore:
+      - "main"
+      - "staging"
+
+jobs:
+  test:
+    name: Test the source
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ secrets.NODE_VERSION }}
+
+      - name: Install deps
+        # env:
+        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} ## if needed
+        run: yarn install
+
+      - name: Run tests
+        run: yarn test

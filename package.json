@@ -1,0 +1,28 @@
+{
+  "name": "nodejs-demo-api",
+  "version": "1.6.99",
+  "main": "index.js",
+  "repository": "https://github.com/ChrisDoykov/terraform-aws-ecs-fargate.git",
+  "author": "Kristiyan Doykov <krisdoikov@gmail.com>",
+  "license": "MIT",
+  "scripts": {
+    "tf:init": "cd terraform && terraform init -backend-config=backend.conf",
+    "tf:create-ecr": "cd terraform && terraform apply -target='module.ecr' -auto-approve",
+    "tf:format": "cd terraform && terraform fmt -recursive",
+    "tf:validate": "cd terraform && terraform validate",
+    "tf:plan": "cd terraform && terraform plan",
+    "tf:refresh": "cd terraform && terraform refresh",
+    "tf:apply": "cd terraform && terraform apply -auto-approve",
+    "tf:destroy": "cd terraform && terraform destroy -auto-approve",
+    "pre-deploy": "yarn tf:init && yarn tf:refresh && yarn tf:format && yarn tf:validate && yarn tf:create-ecr",
+    "deploy": "yarn pre-deploy && yarn tf:plan && yarn tf:apply",
+    "start": "node index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

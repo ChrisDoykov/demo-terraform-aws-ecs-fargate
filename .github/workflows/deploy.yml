@@ -1,0 +1,379 @@
+name: Deploy to AWS
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - staging
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.TF_VAR_AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_VAR_AWS_SECRET_ACCESS_KEY }}
+  TF_VAR_aws_access_key_id: ${{ secrets.TF_VAR_AWS_ACCESS_KEY_ID }}
+  TF_VAR_aws_secret_access_key: ${{ secrets.TF_VAR_AWS_SECRET_ACCESS_KEY }}
+  TF_VAR_region: ${{ secrets.TF_VAR_REGION }}
+  TF_VAR_domain_name: ${{ secrets.TF_VAR_DOMAIN_NAME }}
+  TF_VAR_tld_zone_id: ${{ secrets.TF_VAR_TLD_ZONE_ID }}
+  TF_VAR_vpc_cidr_block: ${{ secrets.TF_VAR_VPC_CIDR_BLOCK }}
+  TF_VAR_namespace: ${{ secrets.TF_VAR_NAMESPACE }}
+  TF_VAR_ecr_force_delete: ${{ secrets.TF_VAR_ECR_FORCE_DELETE }}
+  TF_VAR_service_name: ${{ secrets.TF_VAR_SERVICE_NAME }}
+  TF_VAR_container_port: ${{ secrets.TF_VAR_CONTAINER_PORT }}
+  TF_VAR_environment: ${{ secrets.TF_VAR_ENVIRONMENT }}
+  TF_VAR_custom_origin_host_header_value: ${{ secrets.TF_VAR_CUSTOM_ORIGIN_HOST_HEADER_VALUE }}
+
+  # Override any other TF_VAR_ variables here
+  TF_VAR_az_count: ${{ (endsWith(github.ref, '/main') && secrets.PRODUCTION_AZ_COUNT || secrets.STAGING_AZ_COUNT) || 2 }}
+  IMAGE_NAME: "${{ secrets.TF_VAR_NAMESPACE }}/${{ secrets.TF_VAR_SERVICE_NAME }}"
+
+  # The reason these have to come from vars. and not secrets. is because the encoding of a secret seems to be messing with the config
+  BUCKET: "${{ vars.BACKEND_BUCKET_NAME }}"
+  TABLE: "${{ vars.BACKEND_TABLE_NAME }}"
+  REGION: "${{ vars.BACKEND_REGION }}"
+  NAMESPACE: "${{ vars.NAMESPACE }}"
+  SERVICE_NAME: "${{ vars.SERVICE_NAME }}"
+
+jobs:
+  logger:
+    name: Log stuff
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "'Beautify' branch name"
+        id: branch-names
+        uses: tj-actions/branch-names@v8
+      - name: Get the branch name of the target of a PR
+        run: |
+          echo "TARGET_BRANCH_PR=${{ steps.branch-names.outputs.base_ref_branch }}" >> $GITHUB_ENV
+      - name: Log PR stuff
+        run: 'echo "Merged: ${{github.event.pull_request.merged}}" PR Title: ${{github.event.pull_request.title}}'
+      - name: Log Commit stuff
+        run: 'echo "Head commit message: ${{github.event.head_commit.message}}" Commits[0] message: ${{github.event.commits[0].message}} '
+      - name: Log ref and PR Target Branch
+        run: 'echo "Github ref: ${{github.ref}}" PR Target: ${{env.TARGET_BRANCH_PR}} '
+
+  # IMPORTANT: If you want to run cleanup just commit and update the version with a message that contains 'Destroy all resources' (case-insensitive)
+  cleanup:
+    name: Clean up
+    runs-on: ubuntu-latest
+    if: ${{  startsWith(github.event.pull_request.title, 'Destroy all resources') || (startsWith(github.event.head_commit.message, 'v') && startsWith(github.event.commits[0].message, 'Destroy all resources')) || startsWith(github.event.head_commit.message, 'Destroy all resources') }}
+
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: "'Beautify' branch name"
+        id: branch-names
+        uses: tj-actions/branch-names@v8
+
+      - name: Get the branch name of the target of a PR
+        run: |
+          echo "TARGET_BRANCH_PR=${{ steps.branch-names.outputs.base_ref_branch }}" >> $GITHUB_ENV
+
+      - name: Set environment (if staging)
+        if: endsWith(env.TARGET_BRANCH_PR, 'staging') || endsWith(github.ref, '/staging')
+        run: |
+          echo "TF_VAR_ecr_force_delete=true" >> $GITHUB_ENV
+          echo "TF_VAR_environment=staging" >> $GITHUB_ENV
+          echo "IMAGE_TYPE=staging" >> $GITHUB_ENV
+
+      - name: Set environment (if production)
+        if: endsWith(env.TARGET_BRANCH_PR, 'main') || endsWith(github.ref, '/main')
+        run: |
+          echo "TF_VAR_environment=production" >> $GITHUB_ENV
+          echo "IMAGE_TYPE=prod" >> $GITHUB_ENV
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{env.TF_VAR_aws_access_key_id}}
+          aws-secret-access-key: ${{env.TF_VAR_aws_secret_access_key}}
+          aws-region: ${{env.TF_VAR_region}}
+
+      # Helps us retrieve the app version to use for tagging the docker image later
+      - name: Export app version
+        id: package-version
+        uses: martinbeentjes/npm-get-version-action@v1.3.1
+
+      - name: Set image version variable
+        run: echo "IMAGE_VERSION=v${{ steps.package-version.outputs.current-version }}-$IMAGE_TYPE" >> $GITHUB_ENV
+
+      # Set the CLI args needed to configure the Terraform backend dynamically
+      - name: Set config
+        env:
+          KEY: "${{ env.NAMESPACE }}/${{ env.TF_VAR_environment }}/${{ env.SERVICE_NAME }}.terraform.tfstate"
+        run: |
+          echo "CONFIG_ARGS=-backend-config="bucket=${{ env.BUCKET }}" -backend-config="dynamodb_table=${{ env.TABLE }}" -backend-config="region=${{ env.REGION }}" -backend-config="key=${{ env.KEY }}"" >> $GITHUB_ENV
+
+      - name: Init
+        run: terraform init $CONFIG_ARGS
+
+      # Pull any recent changes since last run
+      - name: Refresh
+        env:
+          TF_VAR_image_version: ${{ env.IMAGE_VERSION }}
+        run: terraform refresh -no-color
+
+      - name: Validate
+        run: terraform validate -no-color
+
+      - name: Destroy resources
+        env:
+          TF_VAR_image_version: ${{ env.IMAGE_VERSION }}
+        run: terraform destroy -auto-approve
+
+  test:
+    name: Test the source
+    runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.event.pull_request.title, 'Destroy all resources') && !startsWith(github.event.head_commit.message, 'Destroy all resources') && !startsWith(github.event.commits[0].message, 'Destroy all resources') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ secrets.NODE_VERSION }}
+      - name: Install deps
+        # env:
+        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} ## if needed
+        run: yarn install
+      - name: Run tests
+        run: yarn test
+
+  # Ensures that our ECR repo is created and that the latest image is present before we deploy the rest of our infra
+  # Otherwise there may be a situation where the ECS Task container would not have an image to run
+  deploy_image_to_ecr:
+    name: Deploy image to ECR
+    runs-on: ubuntu-latest
+
+    needs: test
+    if: ${{ !startsWith(github.event.pull_request.title, 'Destroy all resources') && !startsWith(github.event.head_commit.message, 'Destroy all resources') && !startsWith(github.event.commits[0].message, 'Destroy all resources') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: "'Beautify' branch name"
+        id: branch-names
+        uses: tj-actions/branch-names@v8
+
+      - name: Get the branch name of the target of a PR
+        run: |
+          echo "TARGET_BRANCH_PR=${{ steps.branch-names.outputs.base_ref_branch }}" >> $GITHUB_ENV
+
+      - name: Set environment (if staging)
+        if: endsWith(env.TARGET_BRANCH_PR, 'staging') || endsWith(github.ref, '/staging')
+        run: |
+          echo "TF_VAR_ecr_force_delete=true" >> $GITHUB_ENV
+          echo "TF_VAR_environment=staging" >> $GITHUB_ENV
+          echo "IMAGE_TYPE=staging" >> $GITHUB_ENV
+
+      - name: Set environment (if production)
+        if: endsWith(env.TARGET_BRANCH_PR, 'main') || endsWith(github.ref, '/main')
+        run: |
+          echo "TF_VAR_environment=production" >> $GITHUB_ENV
+          echo "IMAGE_TYPE=prod" >> $GITHUB_ENV
+
+      - name: Export app version
+        id: package-version
+        uses: martinbeentjes/npm-get-version-action@v1.3.1
+
+      - name: Set image version variable
+        run: echo "IMAGE_VERSION=v${{ steps.package-version.outputs.current-version }}-$IMAGE_TYPE" >> $GITHUB_ENV
+
+      - name: Export repo name
+        run: echo "REPO=${TF_VAR_namespace@L}/${{ env.TF_VAR_environment }}/${{ env.TF_VAR_service_name }}" >> $GITHUB_ENV
+
+      - name: Set config
+        env:
+          KEY: "${{ env.NAMESPACE }}/${{ env.TF_VAR_environment }}/${{ env.SERVICE_NAME }}.terraform.tfstate"
+        run: |
+          echo "CONFIG_ARGS=-backend-config="bucket=${{ env.BUCKET }}" -backend-config="dynamodb_table=${{ env.TABLE }}" -backend-config="region=${{ env.REGION }}" -backend-config="key=${{ env.KEY }}"" >> $GITHUB_ENV
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{env.TF_VAR_aws_access_key_id}}
+          aws-secret-access-key: ${{env.TF_VAR_aws_secret_access_key}}
+          aws-region: ${{env.TF_VAR_region}}
+
+      - name: Log into Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Format
+        working-directory: ./terraform
+        run: terraform fmt -recursive
+
+      - name: Init
+        working-directory: ./terraform
+        run: terraform init $CONFIG_ARGS
+
+      - name: Refresh
+        working-directory: ./terraform
+        env:
+          TF_VAR_image_version: ${{ env.IMAGE_VERSION }}
+        run: terraform refresh -no-color
+
+      - name: Validate
+        working-directory: ./terraform
+        run: terraform validate -no-color
+
+      - name: Get outputs
+        uses: dflook/terraform-output@v1
+        id: tf-outputs
+        env:
+          KEY: "${{ env.NAMESPACE }}/${{ env.TF_VAR_environment }}/${{ env.SERVICE_NAME }}.terraform.tfstate"
+        with:
+          path: ./terraform
+          backend_config: |
+            bucket=${{ env.BUCKET }}
+            key=${{ env.KEY }}
+            region=${{ env.REGION }}
+            dynamodb_table=${{ env.TABLE }}
+
+      - name: (Conditional) Apply
+        if: ${{ !contains(steps.tf-outputs.outputs.ecr_repo_registry, 'amazonaws.com') }}
+        id: apply
+        working-directory: ./terraform
+        env:
+          TF_VAR_image_version: ${{ env.IMAGE_VERSION }}
+        run: |
+          echo "Repo didn't exist" && \
+          terraform apply -auto-approve -target="module.ecr"
+
+      - name: (Conditional) Get outputs (Post Apply)
+        if: ${{ !contains(steps.tf-outputs.outputs.ecr_repo_registry, 'amazonaws.com') }}
+        uses: dflook/terraform-output@v1
+        id: post-apply-outputs
+        env:
+          KEY: "${{ env.NAMESPACE }}/${{ env.TF_VAR_environment }}/${{ env.SERVICE_NAME }}.terraform.tfstate"
+        with:
+          path: ./terraform
+          backend_config: |
+            bucket=${{ env.BUCKET }}
+            key=${{ env.KEY }}
+            region=${{ env.REGION }}
+            dynamodb_table=${{ env.TABLE }}
+
+      - name: (Conditional) Set Repo URL var (Post Apply)
+        if: ${{ !contains(steps.tf-outputs.outputs.ecr_repo_registry, 'amazonaws.com') }}
+        run: echo "ECR_REPO_URL=${{ steps.post-apply-outputs.outputs.ecr_repo_url }}" >> $GITHUB_ENV
+
+      - name: (Conditional) Set Repo URL (No Apply)
+        if: ${{ contains(steps.tf-outputs.outputs.ecr_repo_registry, 'amazonaws.com') }}
+        run: echo "ECR_REPO_URL=${{ steps.tf-outputs.outputs.ecr_repo_url }}" >> $GITHUB_ENV
+
+      - name: Build image
+        run: |
+          docker build --build-arg SERVICE_NAME=${{ env.SERVICE_NAME }} -t  ${{ env.IMAGE_NAME }}:${{env.IMAGE_VERSION}} .
+
+      - name: Tag image
+        run: |
+          docker tag ${{ env.IMAGE_NAME }}:${{env.IMAGE_VERSION}} ${{ env.ECR_REPO_URL }}:${{ env.IMAGE_VERSION }}
+
+      - name: Push image to ECR
+        run: |
+          docker push ${{ env.ECR_REPO_URL }}:${{ env.IMAGE_VERSION }}
+
+  # Deploys the bulk of the infrastructure to AWS
+  terraform:
+    name: Deploy Infra
+    needs: [test, deploy_image_to_ecr]
+    runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.event.pull_request.title, 'Destroy all resources') && !startsWith(github.event.head_commit.message, 'Destroy all resources') && !startsWith(github.event.commits[0].message, 'Destroy all resources') }}
+
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Terraform Setup
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: "'Beautify' branch name"
+        id: branch-names
+        uses: tj-actions/branch-names@v8
+
+      - name: Get the branch name of the target of a PR
+        run: |
+          echo "TARGET_BRANCH_PR=${{ steps.branch-names.outputs.base_ref_branch }}" >> $GITHUB_ENV
+
+      - name: Set environment to staging
+        if: endsWith(env.TARGET_BRANCH_PR, 'staging') || endsWith(github.ref, '/staging')
+        run: |
+          echo "TF_VAR_ecr_force_delete=true" >> $GITHUB_ENV
+          echo "TF_VAR_environment=staging" >> $GITHUB_ENV
+          echo "IMAGE_TYPE=staging" >> $GITHUB_ENV
+
+      - name: Set environment to production
+        if: endsWith(env.TARGET_BRANCH_PR, 'main') || endsWith(github.ref, '/main')
+        run: |
+          echo "TF_VAR_environment=production" >> $GITHUB_ENV
+          echo "IMAGE_TYPE=prod" >> $GITHUB_ENV
+
+      - name: Export app version
+        id: package-version
+        uses: martinbeentjes/npm-get-version-action@v1.3.1
+
+      - name: Set image version variable
+        run: echo "IMAGE_VERSION=v${{ steps.package-version.outputs.current-version }}-$IMAGE_TYPE" >> $GITHUB_ENV
+
+      - name: Set config
+        env:
+          KEY: "${{ env.NAMESPACE }}/${{ env.TF_VAR_environment }}/${{ env.SERVICE_NAME }}.terraform.tfstate"
+        run: |
+          echo "CONFIG_ARGS=-backend-config="bucket=${{ env.BUCKET }}" -backend-config="dynamodb_table=${{ env.TABLE }}" -backend-config="region=${{ env.REGION }}" -backend-config="key=${{ env.KEY }}"" >> $GITHUB_ENV
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{env.TF_VAR_aws_access_key_id}}
+          aws-secret-access-key: ${{env.TF_VAR_aws_secret_access_key}}
+          aws-region: ${{env.TF_VAR_region}}
+
+      - name: Terraform Format
+        run: terraform fmt -recursive
+
+      - name: Init
+        run: terraform init $CONFIG_ARGS
+
+      - name: Refresh
+        env:
+          TF_VAR_image_version: ${{ env.IMAGE_VERSION }}
+        run: terraform refresh -no-color
+
+      - name: Terraform Validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        env:
+          TF_VAR_image_version: ${{ env.IMAGE_VERSION }}
+        run: terraform plan -no-color
+
+      - name: Terraform Apply
+        env:
+          TF_VAR_image_version: ${{ env.IMAGE_VERSION }}
+        run: terraform apply -auto-approve
