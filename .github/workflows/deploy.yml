@@ -249,7 +249,7 @@ jobs:
             region=${{ env.REGION }}
             dynamodb_table=${{ env.TABLE }}
 
-      - name: (Conditional) Apply
+      - name: (Conditional) Apply ECR module only
         if: ${{ !contains(steps.tf-outputs.outputs.ecr_repo_registry, 'amazonaws.com') }}
         id: apply
         working-directory: ./terraform
