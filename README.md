@@ -111,7 +111,7 @@ This can be achieved by setting the TF_VAR_environment variable to the correct v
 
 If you're trying to destroy all resources in `staging` for example, you need to make a commit with a commit message of `Destroy all resources` (can be configured inside Github Actions variables, specifically the `DESTROY_KEYWORD` variable).
 
-If you're trying to destroy the production setup and you've set up branch protection on `main`, what you should do is merge `staging` into `main` and set the merge commit message to `Destroy all resources`.
+When destroying the production setup and you've set up branch protection on `main`, what you should do is merge `staging` into `main` and set the merge commit message to `Destroy all resources`.
 
 **Important Note:** Deletion in CI/CD will fail if the `TF_VAR_ecr_force_delete` variable is set to `false` in production so you will have to delete those ECR repos manually but the command will take care of everything else for you. In staging the `TF_VAR_ecr_force_delete` variable gets set to `true` by default (by the CI/CD flow) and this can be overriden if desired in `deploy.yml`. The reason I've not set `continue_on_error` for the `terraform destroy` step is because sometimes the error could be something other than `The repository with name '***/production/***' in registry with id '****************' cannot be deleted because it still contains images` and we would want to consider any other error a failure and not a success.
 
