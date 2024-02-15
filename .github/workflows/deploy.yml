@@ -283,7 +283,7 @@ jobs:
         if: ${{ !contains(steps.tf-outputs.outputs.ecr_repo_registry, 'amazonaws.com') }}
         run: echo "ECR_REPO_URL=${{ steps.post-apply-outputs.outputs.ecr_repo_url }}" >> $GITHUB_ENV
 
-      - name: (Conditional) Set Repo URL (No Apply)
+      - name: (Conditional) Set Repo URL (Without Apply)
         if: ${{ contains(steps.tf-outputs.outputs.ecr_repo_registry, 'amazonaws.com') }}
         run: echo "ECR_REPO_URL=${{ steps.tf-outputs.outputs.ecr_repo_url }}" >> $GITHUB_ENV
 
