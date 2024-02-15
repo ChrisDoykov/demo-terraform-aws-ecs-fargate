@@ -60,7 +60,7 @@ export NODE_VERSION= # Only needed for CI/CD
 export NPM_TOKEN= # Only if you're using private NPM modules
 ```
 
-The following would need to be configured inside of your CI/CD pipeline:
+The following would need to be configured inside of your CI/CD pipeline (see `/.github/workflows/deploy.yml` for an example):
 
 ```bash
 TF_VAR_environment # Baed on the branch that the pipeline is running for
@@ -98,8 +98,6 @@ This can be achieved by setting the TF_VAR_environment variable to the correct v
 
 **IMPORTANT:** For development a single value MUST be used across all developers in order to avoid spinning up the entire infrastructure for every single developer individually. Another important note is to remember to `terraform refresh` each time you start developing in order to pull the most recent changes.
 
-**NOTE:** If this is used for demo purposes, you must uncomment the last step in the CI/CD to destroy your resources after deploying successfully (hence why it's the last step). It might fail due to the ecr_force_delete flag being set to `false` in production so you will have to delete those ECR repos manually but the command will take care of everything else for you. In staging the ecr_force_delete flag gets set to `true` by default and this can be overriden if desired in `deploy.yml`.
-
 **NOTE:** If working on a feature branch make sure to set the `TF_VAR_environment` variable to a specific name like `feature-123` and your local S3 key in `backend.conf` should also be changed to match that name. The pipeline won't run on anything but the `staging` and `main` branches so any features need to be tested locally before merged with `staging`.
 
 ## Sample dev flow:
@@ -111,7 +109,11 @@ This can be achieved by setting the TF_VAR_environment variable to the correct v
 
 ## Destroying in production
 
+If you're trying to destroy all resources in `staging` for example, you need to make a commit with a commit message of `Destroy all resources` (can be configured inside Github Actions variables, specifically the `DESTROY_KEYWORD` variable).
+
 If you're trying to destroy the production setup and you've set up branch protection on `main`, what you should do is merge `staging` into `main` and set the merge commit message to `Destroy all resources`.
+
+**Important Note:** Deletion in CI/CD will fail if the `TF_VAR_ecr_force_delete` variable is set to `false` in production so you will have to delete those ECR repos manually but the command will take care of everything else for you. In staging the `TF_VAR_ecr_force_delete` variable gets set to `true` by default (by the CI/CD flow) and this can be overriden if desired in `deploy.yml`. The reason I've not set `continue_on_error` for the `terraform destroy` step is because sometimes the error could be something other than `The repository with name '***/production/***' in registry with id '****************' cannot be deleted because it still contains images` and we would want to consider any other error a failure and not a success.
 
 **Important Note:** Because of the fact that some resources need to be shared across environments (like DNS hosted zones, etc.) you need to be mindful that if you destroy one of your environments this will affect your other environment and you'd need to deploy that one again to re-create all the common resources deleted by the destruction of the other environment. This is not a big issue for the most part but it is something you need to be aware of. In general you'll always ideally keep your two main environments running for the duration of the project (or for as long as you need the service to keep running and be available) and either delete all environments together or none at all, it's a rare case that you'd only need to destroy `staging` for example and keep `prod` running and this scenario can be remedied with minmal downtime using the solution mentioned at the start of this note.
 
