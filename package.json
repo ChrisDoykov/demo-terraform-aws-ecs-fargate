@@ -1,6 +1,6 @@
 {
   "name": "nodejs-demo-api",
-  "version": "1.6.105",
+  "version": "1.6.106",
   "main": "index.js",
   "repository": "https://github.com/ChrisDoykov/terraform-aws-ecs-fargate.git",
   "author": "Kristiyan Doykov <krisdoikov@gmail.com>",
