@@ -9,6 +9,8 @@ terraform {
   backend "s3" {} # Configuration provided using a .conf file (locally) and terraform init -backend-config= (in CI/CD)
 }
 
+# Setup inidividual modules
+
 module "cloudfront" {
   source = "./modules/cloudfront"
   providers = {
