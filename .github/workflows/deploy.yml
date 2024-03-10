@@ -381,6 +381,7 @@ jobs:
         run: terraform plan -no-color
 
       - name: (Terraform) Apply
+
         # Will run only on a closed (merged) PR on main or a push to staging
         if: ${{ !github.event.pull_request.id || (github.event.pull_request.merged && endsWith(env.TARGET_BRANCH_PR, 'main'))}}
         env:
