@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+    types: [closed]
   push:
     branches:
       - staging
@@ -62,7 +63,7 @@ jobs:
   cleanup:
     name: Clean up
     runs-on: ubuntu-latest
-    if: ${{ startsWith(github.event.pull_request.title, vars.DESTROY_KEYWORD) || (startsWith(github.event.head_commit.message, 'v') && startsWith(github.event.commits[0].message, vars.DESTROY_KEYWORD)) || startsWith(github.event.head_commit.message, vars.DESTROY_KEYWORD) }}
+    if: ${{ vars.DESTROY_KEYWORD && ((startsWith(github.event.pull_request.title, vars.DESTROY_KEYWORD) && github.event.pull_request.merged) || (startsWith(github.event.head_commit.message, 'v') && startsWith(github.event.commits[0].message, vars.DESTROY_KEYWORD)) || startsWith(github.event.head_commit.message, vars.DESTROY_KEYWORD)) }}
 
     defaults:
       run:
@@ -380,6 +381,8 @@ jobs:
         run: terraform plan -no-color
 
       - name: (Terraform) Apply
+        # Will run only on a closed (merged) PR on main or a push to staging
+        if: ${{ !github.event.pull_request.id || (github.event.pull_request.merged && endsWith(env.TARGET_BRANCH_PR, 'main'))}}
         env:
           TF_VAR_image_version: ${{ env.IMAGE_VERSION }}
         run: terraform apply -auto-approve
